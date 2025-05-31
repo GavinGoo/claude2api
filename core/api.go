@@ -3,6 +3,7 @@ package core
 import (
 	"bufio"
 	"claude2api/logger"
+	"claude2api/config"
 	"claude2api/model"
 	"encoding/base64"
 	"encoding/json"
@@ -21,8 +22,10 @@ import (
 type Client struct {
 	SessionKey   string
 	orgID        string
+	cookie       string
 	client       *req.Client
 	model        string
+	thinking	 string
 	defaultAttrs map[string]interface{}
 }
 
@@ -41,8 +44,14 @@ type ResponseEvent struct {
 	} `json:"error"`
 }
 
-func NewClient(sessionKey string, proxy string, model string) *Client {
-	client := req.C().ImpersonateChrome().SetTimeout(time.Minute * 5)
+func NewClient(sessionKey string, proxy string, model string, thinking string, cookie string) *Client {
+	client := req.C().
+				ImpersonateChrome().
+				SetTimeout(time.Minute * 5).
+				// EnableForceHTTP2().
+				SetUserAgent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36").
+				SetTLSFingerprintEdge().
+				DevMode()
 	client.Transport.SetResponseHeaderTimeout(time.Second * 10)
 	if proxy != "" {
 		client.SetProxyURL(proxy)
@@ -53,7 +62,7 @@ func NewClient(sessionKey string, proxy string, model string) *Client {
 		"accept-language":           "zh-CN,zh;q=0.9",
 		"anthropic-client-platform": "web_claude_ai",
 		"content-type":              "application/json",
-		"origin":                    "https://claude.ai",
+		"origin":                    config.ConfigInstance.MirrorProxy,
 		"priority":                  "u=1, i",
 	}
 	for key, value := range headers {
@@ -64,11 +73,19 @@ func NewClient(sessionKey string, proxy string, model string) *Client {
 		Name:  "sessionKey",
 		Value: sessionKey,
 	})
+	if config.ConfigInstance.FuClaude {
+		// logger.Info("FuClaude enabled, setting _Secure-next-auth.session-data cookie: %s", cookie)
+		client.SetCommonCookies(&http.Cookie{
+			Name:  "_Secure-next-auth.session-data",
+			Value: cookie,
+		})
+	}
 	// Create default client with session key
 	c := &Client{
 		SessionKey: sessionKey,
 		client:     client,
 		model:      model,
+		thinking:   thinking,
 		defaultAttrs: map[string]interface{}{
 			"personalized_styles": []map[string]interface{}{
 				{
@@ -87,15 +104,17 @@ func NewClient(sessionKey string, proxy string, model string) *Client {
 					"type": "web_search_v0",
 					"name": "web_search",
 				},
-				// {"type": "artifacts_v0", "name": "artifacts"},
-				// {"type": "repl_v0", "name": "repl"},
+				{"type": "artifacts_v0", "name": "artifacts"},
+				{"type": "repl_v0", "name": "repl"},
 			},
 			"parent_message_uuid": "00000000-0000-4000-8000-000000000000",
 			"attachments":         []interface{}{},
 			"files":               []interface{}{},
 			"sync_sources":        []interface{}{},
+			"locale":              "en-US",
 			"rendering_mode":      "messages",
 			"timezone":            "America/New_York",
+			// "timezone":            "Asia/Shanghai",
 		},
 	}
 	return c
@@ -106,10 +125,12 @@ func (c *Client) SetOrgID(orgID string) {
 	c.orgID = orgID
 }
 func (c *Client) GetOrgID() (string, error) {
-	url := "https://claude.ai/api/organizations"
+	url := config.ConfigInstance.MirrorProxy+"/api/organizations"
+	logger.Info("Handling GetOrgID_url: " + url)
 	resp, err := c.client.R().
-		SetHeader("referer", "https://claude.ai/new").
+		SetHeader("referer", config.ConfigInstance.MirrorProxy+"/new").
 		Get(url)
+	logger.Info("Handling GetOrgID: " + resp.String())
 	if err != nil {
 		return "", fmt.Errorf("request failed: %w", err)
 	}
@@ -147,16 +168,21 @@ func (c *Client) CreateConversation() (string, error) {
 	if c.orgID == "" {
 		return "", errors.New("organization ID not set")
 	}
-	url := fmt.Sprintf("https://claude.ai/api/organizations/%s/chat_conversations", c.orgID)
+	logger.Info("Handling CreateConversation: " + c.orgID)
+	url := fmt.Sprintf(config.ConfigInstance.MirrorProxy+"/api/organizations/%s/chat_conversations", c.orgID)
 	// 如果以-think结尾
 	if strings.HasSuffix(c.model, "-think") {
 		c.model = strings.TrimSuffix(c.model, "-think")
-		if err := c.UpdateUserSetting("paprika_mode", "extended"); err != nil {
-			logger.Error(fmt.Sprintf("Failed to update paprika_mode: %v", err))
+		if c.thinking == "null" || c.thinking == "false" {
+			if err := c.UpdateUserSetting("paprika_mode", "extended"); err != nil {
+				logger.Error(fmt.Sprintf("Failed to update paprika_mode: %v", err))
+			}
 		}
 	} else {
-		if err := c.UpdateUserSetting("paprika_mode", nil); err != nil {
-			logger.Error(fmt.Sprintf("Failed to update paprika_mode: %v", err))
+		if c.thinking == "null" || c.thinking == "true" {
+			if err := c.UpdateUserSetting("paprika_mode", nil); err != nil {
+				logger.Error(fmt.Sprintf("Failed to update paprika_mode: %v", err))
+			}
 		}
 	}
 	requestBody := map[string]interface{}{
@@ -171,7 +197,7 @@ func (c *Client) CreateConversation() (string, error) {
 	}
 
 	resp, err := c.client.R().
-		SetHeader("referer", "https://claude.ai/new").
+		SetHeader("referer", config.ConfigInstance.MirrorProxy+"/new").
 		SetBody(requestBody).
 		Post(url)
 	if err != nil {
@@ -185,7 +211,7 @@ func (c *Client) CreateConversation() (string, error) {
 	if err := json.Unmarshal(resp.Bytes(), &result); err != nil {
 		return "", fmt.Errorf("failed to parse response: %w", err)
 	}
-	logger.Info(fmt.Sprintf("create conversation response: %s", resp.String()))
+	// logger.Info(fmt.Sprintf("create conversation response: %s", resp.String()))
 	uuid, ok := result["uuid"].(string)
 	if !ok {
 		return "", errors.New("conversation UUID not found in response")
@@ -195,10 +221,11 @@ func (c *Client) CreateConversation() (string, error) {
 
 // SendMessage sends a message to a conversation and returns the status and response
 func (c *Client) SendMessage(conversationID string, message string, stream bool, gc *gin.Context) (int, error) {
+	logger.Info("Handling message for conversation: " + conversationID)
 	if c.orgID == "" {
 		return 500, errors.New("organization ID not set")
 	}
-	url := fmt.Sprintf("https://claude.ai/api/organizations/%s/chat_conversations/%s/completion",
+	url := fmt.Sprintf(config.ConfigInstance.MirrorProxy+"/api/organizations/%s/chat_conversations/%s/completion",
 		c.orgID, conversationID)
 	// Create request body with default attributes
 	requestBody := c.defaultAttrs
@@ -208,7 +235,7 @@ func (c *Client) SendMessage(conversationID string, message string, stream bool,
 	}
 	// Set up streaming response
 	resp, err := c.client.R().DisableAutoReadResponse().
-		SetHeader("referer", fmt.Sprintf("https://claude.ai/chat/%s", conversationID)).
+		SetHeader("referer", fmt.Sprintf(config.ConfigInstance.MirrorProxy+"/chat/%s", conversationID)).
 		SetHeader("accept", "text/event-stream, text/event-stream").
 		SetHeader("anthropic-client-platform", "web_claude_ai").
 		SetHeader("cache-control", "no-cache").
@@ -222,6 +249,7 @@ func (c *Client) SendMessage(conversationID string, message string, stream bool,
 		return http.StatusTooManyRequests, fmt.Errorf("rate limit exceeded")
 	}
 	if resp.StatusCode != http.StatusOK {
+		logger.Error("Handling SendMessage Error: " + resp.String())
 		return resp.StatusCode, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 	return 200, c.HandleResponse(resp.Body, stream, gc)
@@ -330,13 +358,13 @@ func (c *Client) DeleteConversation(conversationID string) error {
 	if c.orgID == "" {
 		return errors.New("organization ID not set")
 	}
-	url := fmt.Sprintf("https://claude.ai/api/organizations/%s/chat_conversations/%s",
+	url := fmt.Sprintf(config.ConfigInstance.MirrorProxy+"/api/organizations/%s/chat_conversations/%s",
 		c.orgID, conversationID)
 	requestBody := map[string]string{
 		"uuid": conversationID,
 	}
 	resp, err := c.client.R().
-		SetHeader("referer", fmt.Sprintf("https://claude.ai/chat/%s", conversationID)).
+		SetHeader("referer", fmt.Sprintf(config.ConfigInstance.MirrorProxy+"/chat/%s", conversationID)).
 		SetBody(requestBody).
 		Delete(url)
 	if err != nil {
@@ -408,11 +436,11 @@ func (c *Client) UploadFile(fileData []string) error {
 		}
 
 		// Create the upload URL
-		url := fmt.Sprintf("https://claude.ai/api/%s/upload", c.orgID)
+		url := fmt.Sprintf(config.ConfigInstance.MirrorProxy+"/api/%s/upload", c.orgID)
 
 		// Create a multipart form request
 		resp, err := c.client.R().
-			SetHeader("referer", "https://claude.ai/new").
+			SetHeader("referer", config.ConfigInstance.MirrorProxy+"/new").
 			SetHeader("anthropic-client-platform", "web_claude_ai").
 			SetFileBytes("file", filename, fileBytes).
 			SetContentType("multipart/form-data").
@@ -460,7 +488,7 @@ func (c *Client) SetBigContext(context string) {
 
 // / UpdateUserSetting updates a single user setting on Claude.ai while preserving all other settings
 func (c *Client) UpdateUserSetting(key string, value interface{}) error {
-	url := "https://claude.ai/api/account?statsig_hashing_algorithm=djb2"
+	url := config.ConfigInstance.MirrorProxy+"/api/account?statsig_hashing_algorithm=djb2"
 
 	// Default settings structure with all possible fields
 	settings := map[string]interface{}{
@@ -509,8 +537,8 @@ func (c *Client) UpdateUserSetting(key string, value interface{}) error {
 
 	// Make the request
 	resp, err := c.client.R().
-		SetHeader("referer", "https://claude.ai/new").
-		SetHeader("origin", "https://claude.ai").
+		SetHeader("referer", config.ConfigInstance.MirrorProxy+"/new").
+		SetHeader("origin", config.ConfigInstance.MirrorProxy).
 		SetHeader("anthropic-client-platform", "web_claude_ai").
 		SetHeader("cache-control", "no-cache").
 		SetHeader("pragma", "no-cache").

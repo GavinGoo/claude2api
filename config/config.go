@@ -18,6 +18,8 @@ import (
 type SessionInfo struct {
 	SessionKey string `yaml:"sessionKey"`
 	OrgID      string `yaml:"orgID"`
+	Cookie     string `yaml:"cookie"`
+	Thinking   string
 }
 
 type SessionRagen struct {
@@ -30,6 +32,8 @@ type Config struct {
 	Address                string        `yaml:"address"`
 	APIKey                 string        `yaml:"apiKey"`
 	Proxy                  string        `yaml:"proxy"`
+	MirrorProxy        	   string        `yaml:"mirrorProxy"`
+	FuClaude               bool          `yaml:"FuClaude"`
 	ChatDelete             bool          `yaml:"chatDelete"`
 	MaxChatHistoryLength   int           `yaml:"maxChatHistoryLength"`
 	RetryCount             int           `yaml:"retryCount"`
@@ -60,15 +64,18 @@ func parseSessionEnv(envValue string) (int, []SessionInfo) {
 
 		if len(parts) > 1 {
 			session.OrgID = parts[1]
+			session.Cookie = parts[2]
 		} else if len(parts) == 1 {
 			session.OrgID = ""
+			session.Cookie = ""
 		}
+		session.Thinking = "null" // 初始化 Thinking 状态为 null
 
 		sessions = append(sessions, session)
 	}
-	if retryCount > 5 {
-		retryCount = 5 // 限制最大重试次数为 5 次
-	}
+	// if retryCount > 5 {
+	// 	retryCount = 5 // 限制最大重试次数为 5 次
+	// }
 	return retryCount, sessions
 }
 
@@ -93,6 +100,19 @@ func (c *Config) SetSessionOrgID(sessionKey, orgID string) {
 		}
 	}
 }
+
+func (c *Config) SetThinkStatus(sessionKey, thinking string) {
+	c.RwMutx.Lock()
+	defer c.RwMutx.Unlock()
+	for i, session := range c.Sessions {
+		if session.SessionKey == sessionKey {
+			logger.Info(fmt.Sprintf("Setting Thinking for session %s to %s", sessionKey, thinking))
+			c.Sessions[i].Thinking = thinking
+			return
+		}
+	}
+}
+
 func (sr *SessionRagen) NextIndex() int {
 	sr.Mutex.Lock()
 	defer sr.Mutex.Unlock()
@@ -148,6 +168,14 @@ func loadConfigFromYAML(configPath string) (*Config, error) {
 		config.Address = "0.0.0.0:8080"
 	}
 
+	if config.MirrorProxy == "" {
+		config.MirrorProxy = "https://claude.ai"
+	}
+
+	for i := range config.Sessions {
+		config.Sessions[i].Thinking = "null" // 初始化 Thinking 状态为 null
+	}
+
 	return &config, nil
 }
 
@@ -168,6 +196,8 @@ func loadConfigFromEnv() *Config {
 		APIKey: os.Getenv("APIKEY"),
 		// 设置代理地址
 		Proxy: os.Getenv("PROXY"),
+		// 设置镜像代理地址
+		MirrorProxy: os.Getenv("MIRROR_PROXY"),
 		// 自动删除聊天
 		ChatDelete: os.Getenv("CHAT_DELETE") != "false",
 		// 设置最大聊天历史长度
@@ -182,6 +212,8 @@ func loadConfigFromEnv() *Config {
 		EnableMirrorApi: os.Getenv("ENABLE_MIRROR_API") == "true",
 		// 设置镜像API前缀
 		MirrorApiPrefix: os.Getenv("MIRROR_API_PREFIX"),
+		// FuClaude
+		FuClaude: os.Getenv("FuClaude") != "false",
 		// 设置读写锁
 		RwMutx: sync.RWMutex{},
 	}
@@ -189,6 +221,10 @@ func loadConfigFromEnv() *Config {
 	// 如果地址为空，使用默认值
 	if config.Address == "" {
 		config.Address = "0.0.0.0:8080"
+	}
+
+	if config.MirrorProxy == "" {
+		config.MirrorProxy = "https://claude.ai"
 	}
 	return config
 }
@@ -232,6 +268,8 @@ func init() {
 	logger.Info(fmt.Sprintf("Address: %s", ConfigInstance.Address))
 	logger.Info(fmt.Sprintf("APIKey: %s", ConfigInstance.APIKey))
 	logger.Info(fmt.Sprintf("Proxy: %s", ConfigInstance.Proxy))
+	logger.Info(fmt.Sprintf("MirrorProxy: %s", ConfigInstance.MirrorProxy))
+	logger.Info(fmt.Sprintf("FuClaude: %t", ConfigInstance.FuClaude))
 	logger.Info(fmt.Sprintf("ChatDelete: %t", ConfigInstance.ChatDelete))
 	logger.Info(fmt.Sprintf("MaxChatHistoryLength: %d", ConfigInstance.MaxChatHistoryLength))
 	logger.Info(fmt.Sprintf("NoRolePrefix: %t", ConfigInstance.NoRolePrefix))

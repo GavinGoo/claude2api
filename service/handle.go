@@ -178,20 +178,20 @@ func extractSessionFromAuthHeader(c *gin.Context) (config.SessionInfo, error) {
 	authInfo = strings.TrimPrefix(authInfo, "Bearer ")
 
 	if authInfo == "" {
-		return config.SessionInfo{SessionKey: "", OrgID: ""}, fmt.Errorf("missing authorization header")
+		return config.SessionInfo{SessionKey: "", OrgID: "", Cookie: ""}, fmt.Errorf("missing authorization header")
 	}
 
 	if strings.Contains(authInfo, ":") {
 		parts := strings.Split(authInfo, ":")
-		return config.SessionInfo{SessionKey: parts[0], OrgID: parts[1]}, nil
+		return config.SessionInfo{SessionKey: parts[0], OrgID: parts[1], Cookie: parts[2]}, nil
 	}
 
-	return config.SessionInfo{SessionKey: authInfo, OrgID: ""}, nil
+	return config.SessionInfo{SessionKey: authInfo, OrgID: "", Cookie: ""}, nil
 }
 
 func handleChatRequest(c *gin.Context, session config.SessionInfo, model string, processor *utils.ChatRequestProcessor, stream bool) bool {
 	// Initialize the Claude client
-	claudeClient := core.NewClient(session.SessionKey, config.ConfigInstance.Proxy, model)
+	claudeClient := core.NewClient(session.SessionKey, config.ConfigInstance.Proxy, model, session.Thinking, session.Cookie)
 
 	// Get org ID if not already set
 	if session.OrgID == "" {
@@ -228,6 +228,13 @@ func handleChatRequest(c *gin.Context, session config.SessionInfo, model string,
 		logger.Error(fmt.Sprintf("Failed to create conversation: %v", err))
 		return false
 	}
+
+	if strings.HasSuffix(model, "-think") {
+		session.Thinking = "true"
+	} else {
+		session.Thinking = "false"
+	}
+	config.ConfigInstance.SetThinkStatus(session.SessionKey, session.Thinking)
 
 	// Send message
 	if _, err := claudeClient.SendMessage(conversationID, processor.Prompt.String(), stream, c); err != nil {
