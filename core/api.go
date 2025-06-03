@@ -104,7 +104,7 @@ func NewClient(sessionKey string, proxy string, model string, thinking string, c
 					"type": "web_search_v0",
 					"name": "web_search",
 				},
-				{"type": "artifacts_v0", "name": "artifacts"},
+				// {"type": "artifacts_v0", "name": "artifacts"},
 				{"type": "repl_v0", "name": "repl"},
 			},
 			"parent_message_uuid": "00000000-0000-4000-8000-000000000000",
