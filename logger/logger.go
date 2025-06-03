@@ -62,7 +62,15 @@ func log(level int, format string, args ...interface{}) {
 		return
 	}
 
-	now := time.Now().Format("2006-01-02 15:04:05.000")
+	timezone := os.Getenv("TZ")
+    if timezone == "" {
+        timezone = "Asia/Shanghai"
+    }
+	loc, err := time.LoadLocation(timezone)
+    if err != nil {
+        loc = time.Local
+    }
+	now := time.Now().In(loc).Format("2006-01-02 15:04:05.000")
 	levelName := levelNames[level]
 	colorFunc := levelColors[level]
 
